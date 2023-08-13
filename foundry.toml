@@ -1,0 +1,14 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.16"
+
+[rpc_endpoints]
+linea_goerli = "${LINEA_GOERLI_RPC_URL}"
+
+[etherscan]
+linea_goerli = { key = "${LINEA_GOERLI_ETHERSCAN_API_KEY}", url =  "${LINEA_GOERLI_ETHERSCAN_API}"}
+
+
+# See more config options https://github.com/foundry-rs/foundry/tree/master/config
