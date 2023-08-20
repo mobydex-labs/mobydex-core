@@ -7,7 +7,21 @@ import {ERC20} from "@openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 contract MOBY is ERC20 {
     uint256 public constant MAX_SUPPLY = 20_000_000 ether;
 
+    address public masterchef;
+    address public masterchefSetter;
+
     constructor() ERC20("Mobydex Token", "MOBY") {
-        _mint(msg.sender, MAX_SUPPLY);
+        masterchefSetter = msg.sender;
+    }
+
+    function setMasterchef(address _masterchef) external {
+        require(msg.sender == masterchefSetter, "MOBY: only masterchef setter");
+        masterchef = _masterchef;
+        masterchefSetter = address(0);
+    }
+
+    function mintForMasterchef(address to, uint256 amount) external {
+        require(msg.sender == masterchef, "MOBY: only masterchef");
+        _mint(to, amount);
     }
 }
