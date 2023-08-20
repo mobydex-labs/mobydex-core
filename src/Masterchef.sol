@@ -6,7 +6,12 @@ import {IERC20} from "@openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeMath} from "@openzeppelin-contracts/contracts/utils/math/SafeMath.sol";
 import {Ownable} from "@openzeppelin-contracts/contracts/access/Ownable.sol";
+
 import {IesMOBY} from "./interfaces/IesMOBY.sol";
+
+interface IMOBY is IERC20 {
+    function mintForMasterchef(address _to, uint256 _amount) external;
+}
 
 contract Masterchef is Ownable {
     using SafeERC20 for IERC20;
@@ -16,6 +21,7 @@ contract Masterchef is Ownable {
     struct UserInfo {
         uint256 amount; // How many LP tokens the user has provided.
         uint256 rewardRewardDebt; // Reward debt. See explanation below.
+        uint256 esRewardDebt;
         // uint256 additionalRewardDebt; // Reward debt. See explanation below.
         //
         // We do some fancy math here. Basically, any point in time, the amount of rewards
@@ -37,12 +43,14 @@ contract Masterchef is Ownable {
         uint256 lastRewardTime; // Last block number that rewards distribution occurs.
         uint256 accRewardPerShare; // Accumulated rewards per share, times 1e12. See below.
         uint256 totalDeposit;
+        uint256 accEsRewardPerShare; // Accumulated rewards per share, times 1e12. See below.
     }
 
     // The reward TOKEN!
-    IERC20 public reward;
+    IMOBY public reward;
     // reward tokens created per block.
     uint256 public rewardPerSec;
+    uint256 public esRewardPerSec;
 
     // The block number when reward received its' last reward
     uint256 public lastTeamRewardBlockTime = type(uint256).max;
@@ -59,9 +67,11 @@ contract Masterchef is Ownable {
     // The block number when reward mining starts.
     uint256 public startTime = type(uint256).max;
 
-    // esReward Share ratio
-    uint256 public esRewardRatio = 10000;
+    // The amount that the team gets per second (a little over 0.3 a second)
+    uint256 public teamRewardPercent = 1000;
     uint256 public constant DENOMINATOR = 10000;
+
+    address public treasury;
 
     IesMOBY public esMOBY;
 
@@ -73,10 +83,18 @@ contract Masterchef is Ownable {
         uint256 amount
     );
 
-    constructor(IERC20 _reward, uint256 _rewardPerSec, IesMOBY _esMOBY) {
+    constructor(
+        IMOBY _reward,
+        uint256 _rewardPerSec,
+        uint256 _esRewardPerSec,
+        IesMOBY _esMOBY
+    ) {
         reward = _reward; //MOBY
         rewardPerSec = _rewardPerSec; // 0.075e18
+        esRewardPerSec = _esRewardPerSec; // 0.075e18
         esMOBY = _esMOBY;
+
+        treasury = msg.sender;
 
         reward.approve(address(esMOBY), type(uint256).max);
     }
@@ -86,8 +104,25 @@ contract Masterchef is Ownable {
         return (block.timestamp >= startTime);
     }
 
+    function updateTreausry(address _treasury) public onlyOwner {
+        treasury = _treasury;
+    }
+
     function updateRewardPerSec(uint256 _rewardPerSec) public onlyOwner {
         rewardPerSec = _rewardPerSec;
+    }
+
+    function updateEsRewardPerSec(uint256 _esRewardPerSec) public onlyOwner {
+        esRewardPerSec = _esRewardPerSec;
+    }
+
+    function updateAndSetRewardPerSec(
+        uint256 _rewardPerSec,
+        uint256 _esRewardPerSec
+    ) public onlyOwner {
+        massUpdatePools();
+        rewardPerSec = _rewardPerSec;
+        esRewardPerSec = _esRewardPerSec;
     }
 
     function updateMultiplier(uint256 multiplierNumber) public onlyOwner {
@@ -119,6 +154,7 @@ contract Masterchef is Ownable {
                 rewardAllocPoint: _rewardAllocPoint,
                 lastRewardTime: lastRewardTime,
                 accRewardPerShare: 0,
+                accEsRewardPerShare: 0,
                 totalDeposit: 0
             })
         );
@@ -176,6 +212,32 @@ contract Masterchef is Ownable {
             );
     }
 
+    // View function to see pending rewards on frontend.
+    function pendingEsReward(
+        uint256 _pid,
+        address _user
+    ) public view returns (uint256) {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][_user];
+        uint256 accRewardPerShare = pool.accEsRewardPerShare;
+        uint256 lpSupply = pool.totalDeposit;
+        if (block.timestamp > pool.lastRewardTime && lpSupply != 0) {
+            uint256 multiplier = getMultiplier(
+                pool.lastRewardTime,
+                block.timestamp
+            );
+            uint256 esReward = multiplier
+                .mul(esRewardPerSec)
+                .mul(pool.rewardAllocPoint)
+                .div(rewardTotalAllocPoint);
+            accRewardPerShare = accRewardPerShare.add(
+                esReward.mul(1e12).div(lpSupply)
+            );
+        }
+        return
+            user.amount.mul(accRewardPerShare).div(1e12).sub(user.esRewardDebt);
+    }
+
     // Update reward variables for all pools. Be careful of gas spending!
     function massUpdatePools() public {
         uint256 length = poolInfo.length;
@@ -199,15 +261,31 @@ contract Masterchef is Ownable {
             pool.lastRewardTime,
             block.timestamp
         );
+
         uint256 rewardReward = multiplier
             .mul(rewardPerSec)
             .mul(pool.rewardAllocPoint)
             .div(rewardTotalAllocPoint);
 
-        // reward.mintFor(address(this), rewardReward);
+        uint256 esReward = multiplier
+            .mul(esRewardPerSec)
+            .mul(pool.rewardAllocPoint)
+            .div(rewardTotalAllocPoint);
+
+        reward.mintForMasterchef(address(this), rewardReward.add(esReward));
+
+        uint256 teamReward = rewardReward
+            .add(esReward)
+            .mul(teamRewardPercent)
+            .div(10000);
+        reward.mintForMasterchef(treasury, teamReward);
 
         pool.accRewardPerShare = pool.accRewardPerShare.add(
             rewardReward.mul(1e12).div(lpSupply)
+        );
+
+        pool.accEsRewardPerShare = pool.accEsRewardPerShare.add(
+            esReward.mul(1e12).div(lpSupply)
         );
 
         pool.lastRewardTime = block.timestamp;
@@ -218,6 +296,11 @@ contract Masterchef is Ownable {
         uint256 pendingRewardReward = pendingReward(_pid, _account);
         if (pendingRewardReward > 0) {
             safeRewardTransfer(_account, pendingRewardReward);
+        }
+
+        uint256 pendingEsReward_ = pendingEsReward(_pid, _account);
+        if (pendingEsReward_ > 0) {
+            esMOBY.stake(pendingEsReward_, _account);
         }
     }
 
@@ -242,6 +325,8 @@ contract Masterchef is Ownable {
         user.rewardRewardDebt = user.amount.mul(pool.accRewardPerShare).div(
             1e12
         );
+        user.esRewardDebt = user.amount.mul(pool.accEsRewardPerShare).div(1e12);
+
         emit Deposit(msg.sender, _pid, _amount);
     }
 
@@ -261,6 +346,8 @@ contract Masterchef is Ownable {
         user.rewardRewardDebt = user.amount.mul(pool.accRewardPerShare).div(
             1e12
         );
+        user.esRewardDebt = user.amount.mul(pool.accEsRewardPerShare).div(1e12);
+
         emit Withdraw(msg.sender, _pid, _amount);
     }
 
@@ -272,21 +359,21 @@ contract Masterchef is Ownable {
         emit EmergencyWithdraw(msg.sender, _pid, user.amount);
         user.amount = 0;
         user.rewardRewardDebt = 0;
+        user.esRewardDebt = 0;
     }
 
     function safeRewardTransfer(address _to, uint256 _amount) internal {
         uint256 rewardBal = reward.balanceOf(address(this));
 
+        bool transferSuccess = false;
+
         if (_amount > rewardBal) {
-            _amount = rewardBal;
-        }
-        uint256 esReward;
-        if (esRewardRatio > 0) {
-            esReward = _amount.mul(esRewardRatio).div(DENOMINATOR);
-            esMOBY.stake(esReward, _to);
+            transferSuccess = reward.transfer(_to, rewardBal);
+        } else {
+            transferSuccess = reward.transfer(_to, _amount);
         }
 
-        reward.transfer(_to, _amount.sub(esReward));
+        require(transferSuccess, "safeEarningsTransfer: transfer failed");
     }
 
     function setStartTime(uint256 _startTime) external onlyOwner {
@@ -299,10 +386,5 @@ contract Masterchef is Ownable {
         }
 
         lastTeamRewardBlockTime = startTime;
-    }
-
-    function setEsRewardRatio(uint256 _esRewardRatio) external onlyOwner {
-        require(_esRewardRatio <= DENOMINATOR);
-        esRewardRatio = _esRewardRatio;
     }
 }
