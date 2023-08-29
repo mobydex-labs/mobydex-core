@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity 0.8.16
+pragma solidity 0.8.16;
 
 import {IERC20} from "@openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -14,7 +14,7 @@ contract MOBYSale is ReentrancyGuard {
         uint256 amount; // How many tokens the user has provided.
         bool claimed; // default false
     }
- 
+
     // admin address
     address public adminAddress;
     // The raising token
@@ -38,8 +38,6 @@ contract MOBYSale is ReentrancyGuard {
 
     // initializer
     bool private initialized;
-
-    bool private adminClaimed;
 
     event Deposit(address indexed user, uint256 amount);
     event Harvest(
@@ -99,6 +97,7 @@ contract MOBYSale is ReentrancyGuard {
         require(_amount > 0, "need _amount > 0");
 
         if (address(lpToken) != address(0)) {
+            require(msg.value == 0, "need msg.value == 0");
             lpToken.safeTransferFrom(
                 address(msg.sender),
                 address(this),
@@ -182,15 +181,15 @@ contract MOBYSale is ReentrancyGuard {
         uint256 _offerAmount
     ) public onlyAdmin {
         if (address(lpToken) == address(0)) {
-            require(_lpAmount > address(this).balance, "not enough token 0");
+            require(_lpAmount <= address(this).balance, "not enough token 0");
         } else {
             require(
-                _lpAmount < lpToken.balanceOf(address(this)),
+                _lpAmount <= lpToken.balanceOf(address(this)),
                 "not enough token 0"
             );
         }
         require(
-            _offerAmount < offeringToken.balanceOf(address(this)),
+            _offerAmount <= offeringToken.balanceOf(address(this)),
             "not enough token 1"
         );
         _transferHelper(address(lpToken), address(msg.sender), _lpAmount);
